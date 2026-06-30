@@ -50,12 +50,12 @@ function runYtDlp(query) {
         
         exec(command, (error, stdout, stderr) => {
             if (error) {
-                return reject(error);
+                return reject(new Error(stderr || error.message));
             }
             
             const lines = stdout.trim().split('\n').filter(l => l.trim().length > 0);
             if (lines.length < 2) {
-                return reject(new Error('Failed to parse yt-dlp output'));
+                return reject(new Error('Failed to parse yt-dlp output. Stdout: ' + stdout + ' Stderr: ' + stderr));
             }
             
             const metadataLine = lines[lines.length - 2];
@@ -176,7 +176,7 @@ app.get('/api/track/load', async (req, res) => {
 
     } catch (error) {
         console.error('Load Error:', error);
-        res.status(500).json({ error: 'Failed to extract track' });
+        res.status(500).json({ error: error.message || 'Failed to extract track' });
     }
 });
 
