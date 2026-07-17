@@ -48,7 +48,7 @@ function runYtDlp(query) {
         const isUrl = query.startsWith('http://') || query.startsWith('https://');
         const target = isUrl ? query : `ytsearch1:${query}`;
         // Use android player client which currently bypasses bot detection best
-        const command = `yt-dlp "${target}" -f "bestaudio[ext=m4a]/bestaudio" --get-url --print "%(artist)s|%(title)s|%(thumbnail)s|%(duration)s" --no-warnings --force-ipv4 --no-check-certificates --extractor-args "youtube:player_client=android"`;
+        const command = `yt-dlp "${target}" -f "bestaudio/best" --get-url --print "%(artist)s|%(title)s|%(thumbnail)s|%(duration)s" --no-warnings --force-ipv4 --no-check-certificates --extractor-args "youtube:player_client=android"`;
         
         exec(command, { timeout: 45000 }, (error, stdout, stderr) => {
             if (error) {
