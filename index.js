@@ -45,8 +45,9 @@ const ytQueue = new AsyncQueue();
 // Helper to run yt-dlp
 function runYtDlp(query) {
     return new Promise((resolve, reject) => {
-        // We use %()s to get artist, title, thumbnail, duration, and the final line is the URL due to --get-url
-        const command = `yt-dlp "ytsearch1:${query}" -f "bestaudio[ext=m4a]/bestaudio" --get-url --print "%(artist)s|%(title)s|%(thumbnail)s|%(duration)s" --no-warnings --force-ipv4`;
+        const isUrl = query.startsWith('http://') || query.startsWith('https://');
+        const target = isUrl ? query : `ytsearch1:${query}`;
+        const command = `yt-dlp "${target}" -f "bestaudio[ext=m4a]/bestaudio" --get-url --print "%(artist)s|%(title)s|%(thumbnail)s|%(duration)s" --no-warnings --force-ipv4`;
         
         exec(command, (error, stdout, stderr) => {
             if (error) {
