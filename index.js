@@ -134,12 +134,73 @@ async function getLRCLIBLyrics(artist, title, duration) {
     return "";
 }
 
+// Convert standard LRC to enhanced LRC word-by-word format
+function convertToEnhancedLRC(lrcText, totalDuration) {
+    if (!lrcText) return "";
+    
+    const lines = lrcText.split('\n').map(l => l.trim()).filter(l => l.length > 0);
+    const parsedLines = [];
+    const pattern = /^\[(\d+):(\d+\.\d+)\](.*)$/;
+    
+    for (const line of lines) {
+        const match = line.match(pattern);
+        if (match) {
+            const m = parseInt(match[1]);
+            const s = parseFloat(match[2]);
+            const timestamp = m * 60 + s;
+            const text = match[3].trim();
+            parsedLines.push({ timestamp, text, original: line });
+        }
+    }
+    
+    const enhancedLines = [];
+    for (let i = 0; i < parsedLines.length; i++) {
+        const item = parsedLines[i];
+        const t_start = item.timestamp;
+        let t_end = totalDuration;
+        
+        if (i + 1 < parsedLines.length) {
+            t_end = parsedLines[i+1].timestamp;
+        } else {
+            t_end = Math.min(t_start + 4.0, totalDuration);
+        }
+        
+        const duration = t_end - t_start;
+        const words = item.text.split(/\s+/).filter(w => w.length > 0);
+        
+        if (words.length === 0) {
+            const m_line = Math.floor(t_start / 60).toString().padStart(2, '0');
+            const s_line = (t_start % 60).toFixed(2).padStart(5, '0');
+            enhancedLines.push(`[${m_line}:${s_line}]`);
+            continue;
+        }
+        
+        const numWords = words.length;
+        let wordDur = duration / numWords;
+        if (wordDur > 0.8) wordDur = 0.8;
+        if (wordDur < 0.15) wordDur = 0.15;
+        
+        const wordTokens = [];
+        for (let j = 0; j < words.length; j++) {
+            const w_time = t_start + (j * wordDur);
+            const m_w = Math.floor(w_time / 60).toString().padStart(2, '0');
+            const s_w = (w_time % 60).toFixed(2).padStart(5, '0');
+            wordTokens.push(`<${m_w}:${s_w}>${words[j]}`);
+        }
+        
+        const m_line = Math.floor(t_start / 60).toString().padStart(2, '0');
+        const s_line = (t_start % 60).toFixed(2).padStart(5, '0');
+        enhancedLines.push(`[${m_line}:${s_line}] ${wordTokens.join(' ')}`);
+    }
+    
+    return enhancedLines.join('\n');
+}
+
 app.get('/api/track/load', async (req, res) => {
     const { query } = req.query;
     if (!query) return res.status(400).json({ error: 'Missing query parameter' });
 
     try {
-        // Parse the query parameter (which is in the format `Artist - Title`) into a clean `artist` and `title`
         let cleanArtist = 'Unknown Artist';
         let cleanTitle = query;
         const dashIndex = query.indexOf(' - ');
@@ -148,35 +209,77 @@ app.get('/api/track/load', async (req, res) => {
             cleanTitle = query.substring(dashIndex + 3).trim();
         }
 
-        // Enqueue extraction to prevent OOM
         const ytData = await ytQueue.enqueue(() => runYtDlp(query + " Audio"));
         
-        // Parallel enrichment
         const [itunesArt, syncedLyrics] = await Promise.all([
             getITunesArtwork(cleanArtist, cleanTitle),
             getLRCLIBLyrics(cleanArtist, cleanTitle, ytData.duration)
         ]);
 
         const finalCover = itunesArt || ytData.thumbnail;
-
-        // Note: the audioUrl is often bound to IP/Session, so passing it back 
-        // to iOS might work, but proxy streaming is more robust.
-        // We will return a proxy URL pointing to our own stream endpoint.
-        // We URL-encode the real audioUrl so the client can pass it back.
         const proxyStreamUrl = `/api/track/stream?url=${encodeURIComponent(ytData.audioUrl)}`;
 
         res.json({
             artist: ytData.artist,
             title: ytData.title,
             coverUrl: finalCover,
-            audioUrl: ytData.audioUrl, // Direct URL
-            proxyUrl: proxyStreamUrl,  // Proxy URL
+            audioUrl: ytData.audioUrl,
+            proxyUrl: proxyStreamUrl,
             lyrics: syncedLyrics
         });
 
     } catch (error) {
         console.error('Load Error:', error);
         res.status(500).json({ error: error.message || 'Failed to extract track' });
+    }
+});
+
+// New endpoint: Download and generate enhanced LRC
+app.get('/api/track/download_and_sync', async (req, res) => {
+    const { url } = req.query;
+    if (!url) return res.status(400).json({ error: 'Missing url parameter' });
+
+    try {
+        console.log(`Downloading and syncing track from URL: ${url}`);
+        
+        // 1. Get track metadata
+        const ytData = await ytQueue.enqueue(() => runYtDlp(url));
+        
+        // 2. Try to split the title if artist isn't clearly separated
+        let cleanArtist = ytData.artist;
+        let cleanTitle = ytData.title;
+        if (cleanArtist === 'Unknown Artist' || !cleanArtist) {
+            const dashIndex = cleanTitle.indexOf(' - ');
+            if (dashIndex !== -1) {
+                cleanArtist = cleanTitle.substring(0, dashIndex).trim();
+                cleanTitle = cleanTitle.substring(dashIndex + 3).trim();
+            }
+        }
+        
+        // 3. Get Lyrics & Art
+        const [itunesArt, standardLyrics] = await Promise.all([
+            getITunesArtwork(cleanArtist, cleanTitle),
+            getLRCLIBLyrics(cleanArtist, cleanTitle, ytData.duration)
+        ]);
+        
+        // 4. Convert to Enhanced LRC
+        let enhancedLyrics = "";
+        if (standardLyrics) {
+            enhancedLyrics = convertToEnhancedLRC(standardLyrics, ytData.duration);
+        }
+
+        // Return the direct streaming URL so iOS can save it locally
+        res.json({
+            artist: cleanArtist,
+            title: cleanTitle,
+            coverUrl: itunesArt || ytData.thumbnail,
+            audioUrl: ytData.audioUrl, // Direct audio URL to download
+            enhancedLyrics: enhancedLyrics
+        });
+
+    } catch (error) {
+        console.error('Download and sync error:', error);
+        res.status(500).json({ error: error.message || 'Failed to download and sync track' });
     }
 });
 
